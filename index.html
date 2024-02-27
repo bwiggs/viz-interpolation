@@ -1,0 +1,259 @@
+<html>
+    <head>
+        <meta name="color-scheme" content="dark">
+    </head>
+    <body>
+        <svg id="chart" height="100%" width="100%">
+        </svg>
+
+        <script type="module">
+            import * as Interpolators from "/modules/interpolators.mjs";
+            import Themes from "/modules/themes.mjs";
+
+            function randomNumberGenerator(numValues = -1) {
+                return function* rand() {
+                    let i = 0;
+                    for (let i = 0; i < numValues-1; i++) yield Math.random();
+                }
+            }
+
+            function randomIntGenerator(min = 1, max = 100) {
+                return function* rand() {
+                    while (true) yield Math.floor(Math.random() * (max - min + 1) + min);
+                }
+            }
+
+            function repeatSequenceGenerator(seq = [0, 1, 2, 3, 4]) {
+                return function* rand() {
+                    let i = 0;
+                    while (true) {
+                        yield seq[i++]/10;
+                        if (i >= seq.length) i = 0;
+                    }
+                }
+            }
+
+            function sinGenerator(amp = 1, freq = 1, phase = 0, shift = 0) {
+                return function* sin() {
+                    let x = 1;
+                    while (true) {
+                        yield amp * Math.sin(x++ * Math.PI * freq + phase) + shift;
+                    }
+                }
+            }
+
+            function* linearGenerator(source, numInterpolationPoints = 0) {
+                const gen = source();
+
+                let start;
+                let end = gen.next().value;
+
+                let i = 0;
+
+                while (true) {
+                    if (!i) {
+                        yield end;
+                        start = end;
+                        end = gen.next().value;
+                    } else {
+                        yield Interpolators.linear(start, end, i / (numInterpolationPoints + 1)); 
+                    }
+
+                    if (++i > numInterpolationPoints) i = 0;
+                }
+            }
+
+            function* cosineGenerator(source, interpolation = 1) {
+                const gen = source();
+                interpolation = Math.max(1, Math.min(interpolation, 100))
+
+                let start = gen.next().value;
+                let curr = start;
+                let end = gen.next().value;
+                let step = 0;
+
+                while (true) {
+                    if (step >= interpolation) {
+                        start = end;
+                        curr = start
+                        end = gen.next().value;
+                        step = 0
+                    } else if (step) {
+                        curr = cosineInterpolate(start, end, step / interpolation)
+                    }
+                    
+                    // console.log({step, start, end, curr: curr});
+                    yield curr;
+                    step++
+                }
+            }
+
+            function* cubicGenerator(source, interpolation = 1) {
+                const gen = source();
+                interpolation = Math.max(1, Math.min(interpolation, 100))
+                
+                let start = gen.next().value;
+                let end = gen.next().value;
+                let slope = (start - end) / SPACING;
+                let prev = slope * SPACING;
+                let next = gen.next().value;
+
+                let step = 0;
+                let curr = start;
+                
+                while (true) {
+                    if (step >= interpolation) {
+                        prev = start;
+                        start = end;
+                        end = next;
+                        next = gen.next().value;
+
+                        curr = start
+                        step = 0
+                    } else if (step) {
+                        curr = Interpolators.cubic(prev, start, end, next, step / interpolation)
+                    }
+                    
+                    // console.log({step, start, end, curr: curr})
+                    yield curr;
+                    step++
+                }
+            }
+
+            function* catmullRomGenerator(source, interpolation = 1) {
+                const gen = source();
+                interpolation = Math.max(1, Math.min(interpolation, 100))
+                
+                let start = gen.next().value;
+                let end = gen.next().value;
+                let slope = (start - end) / SPACING;
+                let prev = slope * SPACING;
+                let next = gen.next().value;
+
+                let step = 0;
+                let curr = start;
+                
+                while (true) {
+                    if (step >= interpolation) {
+                        prev = start;
+                        start = end;
+                        end = next;
+                        next = gen.next().value;
+
+                        curr = start
+                        step = 0
+                    } else if (step) {
+                        curr = Interpolators.catmullRom(prev, start, end, next, step / interpolation)
+                    }
+                    
+                    // console.log({step, start, end, curr: curr})
+                    yield curr;
+                    step++
+                }
+            }
+
+            function* hermiteGenerator(source, interpolations = 0) {
+                const gen = source();
+
+                let start = gen.next().value;
+                let prev = start;
+                let end = gen.next().value;
+                let next = gen.next().value || end;
+
+                let step = 0;
+
+                let stop = 2;
+
+                while (true) {
+                    console.log({prev, start, end, next})
+                    if (step === 0) {
+                        console.log("start");
+                        yield start;
+                    } else if (step <= interpolations) {
+                        yield Interpolators.hermite(prev, start, end, next, step / (interpolations + 1))
+                    } 
+                    else if (!stop) {
+                        console.log("done");
+                        yield start
+                        return;
+                    } 
+                    else {
+                        console.log("updating");
+                        prev = start
+                        start = end
+                        end = next
+                        next = gen.next().value;
+                        if (!next) {
+                            stop--;
+                            next = end;
+                        }
+                        step = -1
+                    }
+                    step++;
+                }
+            }
+
+            const chart = document.getElementById("chart");
+
+            const NUM_VALUES = 10;
+            const INTERPOLATIONS = 10;
+
+            const TOTAL_STEPS = NUM_VALUES + ((NUM_VALUES-1) * INTERPOLATIONS)
+
+            const SPACING = chart.clientWidth / (TOTAL_STEPS - 1);
+
+            function* points(source, interpolator, xstep, total_steps, num_interpolations) {
+                const points = interpolator(source, num_interpolations);
+
+                let i = 0;
+                let x = 0;
+                let pt = points.next();
+                
+                while (!pt.done ){
+                    if (i > 1000) {
+                        console.warn("canceling")
+                        return;
+                    }
+
+                    yield { 
+                        i,
+                        inter: !!(i && (i % (num_interpolations + 1)) ), 
+                        x: x, 
+                        y: pt.value
+                    }
+
+                    x += xstep;
+                    pt = points.next();
+                    i++;
+                }
+            }
+
+            const Theme = Themes.Neon;
+
+            // let interpolator = linearGenerator;
+            // let interpolator = cosineGenerator;
+            // let interpolator = cubicGenerator;
+            // let interpolator = catmullRomGenerator;
+            let interpolator = hermiteGenerator;
+
+            // let sourceData = repeatSequenceGenerator([3, 7, 4, 6, 8, 9, 1]);
+            // let sourceData = repeatSequenceGenerator([1, 5, 4, 5.5, 1, 9, 3, 8]);
+            // let sourceData = repeatSequenceGenerator([1,3,2,4,3,5,4,6,5,7,6,8]);
+            // let sourceData = repeatSequenceGenerator([8, 2, 5, 6, 9, 1, 4, 3, 7, 5, 0]);
+            let sourceData = randomNumberGenerator(NUM_VALUES);
+            // let sourceData = randomIntGenerator(3, 8);
+            // let sourceData = sinGenerator(.1, 1, 1, .5);
+
+            const data = points(sourceData, interpolator, SPACING, TOTAL_STEPS, INTERPOLATIONS);
+            let path = "";
+            let dots = [];
+            for(let pt of data) {
+                let cmd = (pt.i) ? "L" : "M";
+                path += `${cmd}${Math.round(pt.x)} ${Math.round(pt.y * chart.clientHeight)} `
+                dots.push(`<circle cx="${pt.x}" cy="${pt.y * chart.clientHeight}" r="${pt.inter ? 5 : 8}" fill="${pt.inter ? Theme.DOT_INT_COLOR : Theme.DOT_COLOR}" />`)
+            }
+            chart.insertAdjacentHTML(`beforeend`, `<path d="${path}" stroke-width="3" fill="none" stroke="${Theme.LINE_COLOR}" />`);
+            dots.forEach(d => chart.insertAdjacentHTML(`beforeend`, d));
+        </script>
+    </body>
+</html>
